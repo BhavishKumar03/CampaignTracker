@@ -8,7 +8,16 @@ import hashlib
 import secrets
 
 app = Flask(__name__)
-CORS(app)
+# Configure CORS to allow credentials and specific origins
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5000", "https://*.vercel.app", "https://*.render.com"],
+        "supports_credentials": True,
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }
+})
+
 # Use SECRET_KEY from environment when available (recommended for production on Render).
 # Fall back to a generated key for local development/testing, but don't rely on this in prod.
 secret_key = os.environ.get('SECRET_KEY')
@@ -18,6 +27,32 @@ if not secret_key:
     secret_key = secrets.token_hex(32)
     app.logger.warning('SECRET_KEY not set; using a generated temporary secret key. Set SECRET_KEY in Render environment for stable sessions.')
 app.secret_key = secret_key
+
+# Error handlers to return JSON instead of HTML
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify(error=str(e)), 400
+
+@app.errorhandler(401)
+def unauthorized(e):
+    return jsonify(error=str(e)), 401
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify(error=str(e)), 404
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify(error=str(e)), 405
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return jsonify(error="Internal server error"), 500
+
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    return jsonify(status="healthy", timestamp=datetime.now().isoformat())
 
 # Data storage files
 LOGIN_FILE = 'login.json'
