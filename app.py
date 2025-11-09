@@ -55,14 +55,27 @@ def health_check():
     return jsonify(status="healthy", timestamp=datetime.now().isoformat())
 
 # Data storage files
-LOGIN_FILE = 'login.json'
-CAMPAIGNS_DIR = 'campaigns'
+DATA_DIR = os.environ.get('DATA_DIR', os.path.abspath(os.path.dirname(__file__)))
+LOGIN_FILE = os.path.join(DATA_DIR, 'login.json')
+CAMPAIGNS_DIR = os.path.join(DATA_DIR, 'campaigns')
 
+# Ensure data directories exist on startup
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(CAMPAIGNS_DIR, exist_ok=True)
+    app.logger.info(f"Data directories initialized: {DATA_DIR}")
+except Exception as e:
+    app.logger.error(f"Failed to create data directories: {str(e)}")
+    
 def get_user_campaigns_file(user_id):
     """Get the campaigns file path for a specific user"""
-    if not os.path.exists(CAMPAIGNS_DIR):
-        os.makedirs(CAMPAIGNS_DIR)
-    return os.path.join(CAMPAIGNS_DIR, f'{user_id}.json')
+    try:
+        if not os.path.exists(CAMPAIGNS_DIR):
+            os.makedirs(CAMPAIGNS_DIR, exist_ok=True)
+        return os.path.join(CAMPAIGNS_DIR, f'{user_id}.json')
+    except Exception as e:
+        app.logger.error(f"Error in get_user_campaigns_file: {str(e)}")
+        raise
 
 def load_campaigns(user_id):
     """Load campaigns from user-specific JSON file"""
@@ -115,19 +128,42 @@ def load_users():
 def save_users(users):
     """Save users to JSON file"""
     try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(LOGIN_FILE) or '.', exist_ok=True)
+        # Ensure parent directory exists
+        parent_dir = os.path.dirname(LOGIN_FILE)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+            app.logger.debug(f"Ensuring directory exists: {parent_dir}")
         
         # Write to temporary file first
         temp_file = f"{LOGIN_FILE}.temp"
-        with open(temp_file, 'w') as f:
-            json.dump(users, f, indent=2)
+        try:
+            with open(temp_file, 'w') as f:
+                json.dump(users, f, indent=2)
+            app.logger.debug(f"Successfully wrote temporary file: {temp_file}")
             
-        # Then atomically rename to target file
-        os.replace(temp_file, LOGIN_FILE)
+            # Then atomically rename to target file
+            os.replace(temp_file, LOGIN_FILE)
+            app.logger.debug(f"Successfully saved users to: {LOGIN_FILE}")
+            
+        except PermissionError as pe:
+            app.logger.error(f"Permission denied writing to {temp_file}: {str(pe)}")
+            raise Exception(f"Permission denied when saving user data. Please check file permissions.")
+            
+        except IOError as io_error:
+            app.logger.error(f"IO Error writing to {temp_file}: {str(io_error)}")
+            raise Exception(f"Failed to write user data: {str(io_error)}")
+            
+        finally:
+            # Clean up temp file if it exists
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception as e:
+                    app.logger.warning(f"Failed to clean up temporary file {temp_file}: {str(e)}")
+                    
     except Exception as e:
-        app.logger.error(f"Error saving users file: {str(e)}")
-        raise
+        app.logger.error(f"Error in save_users: {str(e)}")
+        raise Exception("Could not save user data. Please try again later.")
 
 def get_user_by_email(users, email):
     """Find user by email"""
