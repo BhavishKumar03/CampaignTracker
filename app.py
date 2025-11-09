@@ -92,15 +92,42 @@ def hash_password(password):
 
 def load_users():
     """Load users from JSON file"""
-    if os.path.exists(LOGIN_FILE):
+    try:
+        if not os.path.exists(LOGIN_FILE):
+            # Create the file if it doesn't exist
+            save_users([])
+            return []
+            
         with open(LOGIN_FILE, 'r') as f:
-            return json.load(f)
-    return []
+            try:
+                return json.load(f)
+            except json.JSONDecodeError as e:
+                app.logger.error(f"Error decoding users JSON: {str(e)}")
+                # If file is corrupted, backup and start fresh
+                if os.path.exists(LOGIN_FILE):
+                    backup_file = f"{LOGIN_FILE}.backup"
+                    os.rename(LOGIN_FILE, backup_file)
+                return []
+    except Exception as e:
+        app.logger.error(f"Error loading users file: {str(e)}")
+        return []
 
 def save_users(users):
     """Save users to JSON file"""
-    with open(LOGIN_FILE, 'w') as f:
-        json.dump(users, f, indent=2)
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(LOGIN_FILE) or '.', exist_ok=True)
+        
+        # Write to temporary file first
+        temp_file = f"{LOGIN_FILE}.temp"
+        with open(temp_file, 'w') as f:
+            json.dump(users, f, indent=2)
+            
+        # Then atomically rename to target file
+        os.replace(temp_file, LOGIN_FILE)
+    except Exception as e:
+        app.logger.error(f"Error saving users file: {str(e)}")
+        raise
 
 def get_user_by_email(users, email):
     """Find user by email"""
@@ -235,29 +262,52 @@ def logout():
 @app.route('/api/auth/forgot-password', methods=['POST'])
 def forgot_password():
     """Initiate password reset"""
-    data = request.get_json()
-    
-    if 'email' not in data:
-        return jsonify({'error': 'Email is required'}), 400
-    
-    users = load_users()
-    user = get_user_by_email(users, data['email'])
-    
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    # Generate reset token (in a real app, you'd send this via email)
-    reset_token = secrets.token_hex(32)
-    user['reset_token'] = reset_token
-    user['reset_token_expires'] = (datetime.now().timestamp() + 3600)  # 1 hour
-    
-    save_users(users)
-    
-    # In a real application, you would send this token via email
-    return jsonify({
-        'message': 'Password reset token generated',
-        'reset_token': reset_token  # Only for demo purposes
-    })
+    try:
+        # Safely parse JSON with error handling
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'Invalid JSON data'}), 400
+        except Exception as e:
+            app.logger.error(f"JSON parsing error: {str(e)}")
+            return jsonify({'error': 'Invalid request data'}), 400
+
+        if 'email' not in data:
+            return jsonify({'error': 'Email is required'}), 400
+
+        # Load users with error handling
+        try:
+            users = load_users()
+        except Exception as e:
+            app.logger.error(f"Error loading users: {str(e)}")
+            return jsonify({'error': 'Server configuration error'}), 500
+
+        user = get_user_by_email(users, data['email'])
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Generate reset token
+        reset_token = secrets.token_hex(32)
+        user['reset_token'] = reset_token
+        user['reset_token_expires'] = (datetime.now().timestamp() + 3600)  # 1 hour
+        
+        # Save users with error handling
+        try:
+            save_users(users)
+        except Exception as e:
+            app.logger.error(f"Error saving users: {str(e)}")
+            return jsonify({'error': 'Could not save reset token'}), 500
+        
+        # In a real application, you would send this token via email
+        return jsonify({
+            'message': 'Password reset token generated',
+            'reset_token': reset_token  # Only for demo purposes
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Unexpected error in forgot_password: {str(e)}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/auth/reset-password', methods=['POST'])
 def reset_password():
